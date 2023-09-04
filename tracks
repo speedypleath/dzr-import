@@ -1,0 +1,39 @@
+#!/bin/bash
+FETCH=${FETCH:-curl -s}
+API="https://api.deezer.com"
+
+unscramble(){ printf "${8}${16}${7}${15}${6}${14}${5}${13}${4}${12}${3}${11}${2}${10}${1}${9}";}
+if [ -z "$DZR_CBC" ]; then
+	command -v $(echo "curl -s" | cut -f 1 -d " ") >/dev/null || { echo "key extraction require $FETCH" 1>&2 ; exit 1 ;}
+	APP_WEB=$(curl -s -L deezer.com/en/channels/explore | sed -n 's/.*src="\([^"]*app-web[^"]*\).*/\1/p' | xargs $FETCH -L)
+	TMP_CBC=$(echo "$APP_WEB"  | tr ,_ '\n'  | sed -n 's/.*\(%5B0x..%2C.\{39\}%2C0x..%5D\).*/\1/p' | sed 's/%../\n/g' | xargs printf '\\%o ')
+	export DZR_CBC=$(unscramble $TMP_CBC);
+fi
+
+for c in jq curl openssl eyeD3; do
+	command -v $c >/dev/null || { echo "$c is required" 1>&2 ; UNMET_DEPENDENCIES=1;}
+done
+[ -n "$UNMET_DEPENDENCIES" ] && exit 1;
+
+
+
+IFS=$'\n' TRACKS_STRING=$(exiftool ./*flac | grep 'Title *:' | sed 's/.* : //')
+TRACKS=($TRACKS_STRING)
+echo $TRACKS
+IFS=$'\n' ARTISTS_STRING=$(exiftool ./*flac | grep 'Artist *:' | sed 's/.* : //')
+ARTISTS=($ARTISTS_STRING)
+echo $ARTISTS
+
+if [ ! -d "output" ]; then
+    mkdir output
+fi
+
+for ((i=0; i<${#TRACKS[@]}; i++)); do
+    query=$(jq -sRr @uri <<< "artist:\"${ARTISTS[$i]}\" track:\"${TRACKS[$i]}\"")
+    echo "$API/search?q=$query"
+    QUERY=$(curl "$API/search?q=$query" | jq '.data[0].link' | sed 's|.*/\(.*\).|\1|' | cat)
+    echo "$QUERY" | xargs basename | xargs ./url | while IFS=$'\t' read url id; do
+        curl -s -k "$url" | ./dec $id > "output/${ARTISTS[$i]} - ${TRACKS[$i]}.mp3" | ./id3 $id "output/${ARTISTS[$i]} - ${TRACKS[$i]}.mp3" || break
+    done
+    sleep 1
+done
